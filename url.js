@@ -7,6 +7,11 @@
 
 (function (global) {
   'use strict';
+  var jsdom;
+  if (typeof process === 'object') {
+    jsdom = require('jsdom').jsdom;
+  }
+  var docObj = jsdom ? jsdom() : document;
 
   // Browsers may have:
   // * No global URL object
@@ -72,8 +77,40 @@
   function URLUtils(url) {
     if (nativeURL)
       return new origURL(url);
-    var anchor = document.createElement('a');
+    var anchor = docObj.createElement('a');
     anchor.href = url;
+    return new Proxy({}, {
+        get: function (target, prop, receiver) {
+            if (prop === 'toString') {
+                return function () { // Todo: PR to jsdom when element is 'a': https://html.spec.whatwg.org/multipage/semantics.html#api-for-a-and-area-elements
+                    return anchor.href;
+                };
+            }
+            return anchor[prop];
+        },
+        set: function (target, prop, val, receiver) {
+            if (prop === 'pathname') {
+                var a = anchor;
+                // In jsdom, href is not getting auto-updated
+                anchor.href = a.protocol +
+                    (a.host !== ''
+                        ? '//' +
+                            (a.username !== '' || a.password !== '' ? a.username + (a.password !== '' ? ':' + a.password : '') + '@' : '') +
+                            a.host + // Todo: Should instead do ipv4/ipv6 serialization: https://url.spec.whatwg.org/#concept-host-serializer
+                            (a.port !== ''
+                                ? ':' + a.port // Should serialize: https://url.spec.whatwg.org/#serialize-an-integer
+                                : '')
+                        : a.protocol === 'file:' ? '//' : '') +
+                        '/' + val + // Todo: Should only apply if cannot be a base URL: https://url.spec.whatwg.org/#url-cannot-be-a-base-url-flag
+                        (a.search !== '' ? a.search : '') +
+                        (a.hash !== '' ? a.hash : ''); // Todo: Should only do if exclude fragment flag is not set
+                anchor[prop] = val;
+                return true;
+            }
+            anchor[prop] = val;
+            return true;
+        }
+    });
     return anchor;
   }
 
@@ -256,10 +293,10 @@
 
         var doc;
         // Use another document/base tag/anchor for relative URL resolution, if possible
-        if (document.implementation && document.implementation.createHTMLDocument) {
-          doc = document.implementation.createHTMLDocument('');
-        } else if (document.implementation && document.implementation.createDocument) {
-          doc = document.implementation.createDocument('http://www.w3.org/1999/xhtml', 'html', null);
+        if (docObj.implementation && docObj.implementation.createHTMLDocument) {
+          doc = docObj.implementation.createHTMLDocument('');
+        } else if (docObj.implementation && docObj.implementation.createDocument) {
+          doc = docObj.implementation.createDocument('http://www.w3.org/1999/xhtml', 'html', null);
           doc.documentElement.appendChild(doc.createElement('head'));
           doc.documentElement.appendChild(doc.createElement('body'));
         } else if (window.ActiveXObject) {
@@ -301,7 +338,7 @@
       }
     })();
 
-    var self = ES5_GET_SET ? this : document.createElement('a');
+    var self = ES5_GET_SET ? this : docObj.createElement('a');
 
 
 
@@ -413,7 +450,16 @@
     }
   }
 
+  URL.createObjectURL = URL.revokeObjectURL = function () {
+      throw new Error('Not implemented!');
+  };
+
   global.URL = URL;
   global.URLSearchParams = URLSearchParams;
 
-}(self));
+  if (typeof exports !== undefined) {
+      exports.URL = URL;
+      exports.URLSearchParams = URLSearchParams;
+  }
+
+}(typeof self !== 'undefined' ? self : this));
